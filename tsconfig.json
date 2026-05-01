@@ -6,7 +6,6 @@
     "module": "ESNext",
     "target": "ES6",
     "allowSyntheticDefaultImports": true,
-    "outDir": ".",
     "moduleResolution": "node",
     "importHelpers": true,
     "isolatedModules": true,

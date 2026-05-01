@@ -102,7 +102,7 @@ export default class BloobHausPlugin extends Plugin {
 			this.dateKeywordsModule.load();
 		}
 		if (this.settings.modules.linkEncoder) {
-			this.linkEncoderModule = new LinkEncoderModule(this.app);
+			this.linkEncoderModule = new LinkEncoderModule(this);
 			this.linkEncoderModule.load();
 		}
 	}
@@ -126,7 +126,7 @@ export default class BloobHausPlugin extends Plugin {
 			this.dateKeywordsModule?.load();
 		} else if (key === 'linkEncoder') {
 			this.linkEncoderModule?.unload();
-			this.linkEncoderModule = enabled ? new LinkEncoderModule(this.app) : null;
+			this.linkEncoderModule = enabled ? new LinkEncoderModule(this) : null;
 			this.linkEncoderModule?.load();
 		}
 	}

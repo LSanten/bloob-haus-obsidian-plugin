@@ -1,9 +1,12 @@
-import { App, Notice, EventRef } from 'obsidian';
+import { App, Notice, EventRef, Plugin } from 'obsidian';
 
 export class LinkEncoderModule {
 	private eventRefs: EventRef[] = [];
+	private app: App;
 
-	constructor(private app: App) {}
+	constructor(private plugin: Plugin) {
+		this.app = plugin.app;
+	}
 
 	load() {
 		const onPaste = this.app.workspace.on('editor-paste', (evt: ClipboardEvent, editor: any) => {
@@ -20,7 +23,7 @@ export class LinkEncoderModule {
 
 		this.eventRefs.push(onPaste as EventRef);
 
-		this.app.addCommand?.({
+		this.plugin.addCommand({
 			id: 'bloob-update-links',
 			name: 'Bloob Haus: Update file/folder links in current note',
 			editorCallback: (editor: any) => {

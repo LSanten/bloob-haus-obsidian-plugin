@@ -1,13 +1,25 @@
 import { App, Plugin, TFile, EventRef, Notice, getAllTags, debounce, Debouncer } from 'obsidian';
 import { TagMatchingSettings } from '../main';
-import { TagScanModal, ScanResult } from '../ui/tag-scan-modal';
+
+interface TagRule {
+	keywords: string[];
+	tag: string;
+}
+
+const RULES_FILE_TEMPLATE = `## Auto tagging rules
+
+Add rows to this table to automatically tag notes when keywords are found.
+Keywords in the first column are comma-separated; the second column is the tag to apply (with or without #).
+
+| To scan for | To be tagged with |
+| ----------- | ----------------- |
+`;
 
 /**
- * Tag Matching — adds frontmatter tags based on user-defined keyword→tag rules.
+ * Auto tagging — adds frontmatter tags based on keyword→tag rules defined in a vault file.
  *
  * Two modes share one rule engine:
  *  1. Live: while editing the active note, matched tags are added (debounced).
- *     Same mechanism as date_updated (vault 'modify' + processFrontMatter).
  *  2. Vault scan: a command builds a {note → tags-to-add} list and shows a
  *     preview modal — nothing is written until the user confirms.
  *
@@ -18,6 +30,7 @@ export class TagMatchingModule {
 	private app: App;
 	private eventRefs: EventRef[] = [];
 	private debouncedLive: Debouncer<[TFile], void>;
+	private rules: TagRule[] = [];
 
 	constructor(private plugin: Plugin, private getSettings: () => TagMatchingSettings) {
 		this.app = plugin.app;
@@ -25,13 +38,27 @@ export class TagMatchingModule {
 	}
 
 	load() {
-		const ref = this.app.vault.on('modify', (file) => {
+		void this.init();
+
+		const modifyRef = this.app.vault.on('modify', async (file) => {
+			if (!(file instanceof TFile)) return;
+			if (file.path === this.getSettings().rulesFile) {
+				await this.loadRulesFromFile();
+				return;
+			}
 			if (!this.getSettings().liveOnActiveNote) return;
-			if (!(file instanceof TFile) || file.extension !== 'md') return;
+			if (file.extension !== 'md') return;
 			if (file !== this.app.workspace.getActiveFile()) return;
 			this.debouncedLive(file);
 		});
-		this.eventRefs.push(ref);
+		this.eventRefs.push(modifyRef);
+
+		const createRef = this.app.vault.on('create', async (file) => {
+			if (file instanceof TFile && file.path === this.getSettings().rulesFile) {
+				await this.loadRulesFromFile();
+			}
+		});
+		this.eventRefs.push(createRef);
 	}
 
 	unload() {
@@ -39,14 +66,57 @@ export class TagMatchingModule {
 		this.eventRefs = [];
 	}
 
+	getRulesCount(): number {
+		return this.rules.length;
+	}
+
+	// ── File I/O ─────────────────────────────────────────────────────────────
+
+	private async init() {
+		await this.ensureRulesFile();
+		await this.loadRulesFromFile();
+	}
+
+	private async ensureRulesFile() {
+		const path = this.getSettings().rulesFile;
+		if (!this.app.vault.getAbstractFileByPath(path)) {
+			await this.app.vault.create(path, RULES_FILE_TEMPLATE);
+		}
+	}
+
+	private async loadRulesFromFile() {
+		const path = this.getSettings().rulesFile;
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) {
+			this.rules = [];
+			return;
+		}
+		const content = await this.app.vault.read(file);
+		this.rules = this.parseRulesFile(content);
+	}
+
+	private parseRulesFile(content: string): TagRule[] {
+		const lines = content.split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+		const sepIdx = lines.findIndex(l => l.includes('---'));
+		if (sepIdx === -1) return [];
+
+		return lines.slice(sepIdx + 1).flatMap(line => {
+			const cols = line.split('|').slice(1, -1).map(c => c.trim());
+			if (cols.length < 2) return [];
+			const keywords = cols[0].split(',').map(k => k.trim()).filter(Boolean);
+			const tag = cols[1];
+			if (!keywords.length || !tag) return [];
+			return [{ keywords, tag }];
+		});
+	}
+
 	// ── Rule engine ──────────────────────────────────────────────────────────
 
-	/** Tags that the rules say should apply to this text (normalized, no '#'). */
 	private matchTags(text: string): string[] {
 		const s = this.getSettings();
 		const found = new Set<string>();
 
-		for (const rule of s.rules) {
+		for (const rule of this.rules) {
 			const tag = this.normalizeTag(rule.tag);
 			if (!tag) continue;
 			for (const kw of rule.keywords) {
@@ -67,7 +137,6 @@ export class TagMatchingModule {
 		if (mode === 'substring') {
 			return new RegExp(esc, flags).test(text);
 		}
-		// whole-word: \b boundaries (so "art" doesn't match "cart")
 		return new RegExp(`\\b${esc}\\b`, flags).test(text);
 	}
 
@@ -75,7 +144,6 @@ export class TagMatchingModule {
 		return (tag || '').trim().replace(/^#/, '');
 	}
 
-	/** Normalize whatever fm.tags currently is (array | comma-string | with-#) to string[]. */
 	private normalizeFmTags(raw: unknown): string[] {
 		if (!raw) return [];
 		const arr: unknown[] = Array.isArray(raw)
@@ -86,7 +154,6 @@ export class TagMatchingModule {
 		return arr.map(t => String(t).trim().replace(/^#/, '')).filter(Boolean);
 	}
 
-	/** All tags already on the file (frontmatter + inline), from the metadata cache, no '#'. */
 	private existingTags(file: TFile): Set<string> {
 		const cache = this.app.metadataCache.getFileCache(file);
 		const all = cache ? getAllTags(cache) || [] : [];
@@ -113,7 +180,6 @@ export class TagMatchingModule {
 
 	// ── Apply ────────────────────────────────────────────────────────────────
 
-	/** Live/single-file: compute and write additions for one file. Returns what was added. */
 	async applyToFile(file: TFile): Promise<string[]> {
 		if (this.isExcluded(file)) return [];
 		const toAdd = await this.computeAdditions(file);
@@ -131,8 +197,8 @@ export class TagMatchingModule {
 
 	// ── Vault scan (preview-first) ───────────────────────────────────────────
 
-	async scanVault(): Promise<ScanResult[]> {
-		const results: ScanResult[] = [];
+	async scanVault(): Promise<{ file: TFile; toAdd: string[] }[]> {
+		const results: { file: TFile; toAdd: string[] }[] = [];
 		for (const file of this.app.vault.getMarkdownFiles()) {
 			if (this.isExcluded(file)) continue;
 			const toAdd = await this.computeAdditions(file);
@@ -142,12 +208,12 @@ export class TagMatchingModule {
 	}
 
 	async openScanModal() {
-		const s = this.getSettings();
-		if (s.rules.length === 0 || s.rules.every(r => !r.tag || r.keywords.every(k => !k.trim()))) {
-			new Notice('Add at least one keyword → tag rule in Bloob Haus settings first');
+		if (this.rules.length === 0) {
+			new Notice(`No rules found in ${this.getSettings().rulesFile} — add some rows to the table first`);
 			return;
 		}
 
+		const { TagScanModal } = await import('../ui/tag-scan-modal');
 		const notice = new Notice('Scanning vault for tags…', 0);
 		const results = await this.scanVault();
 		notice.hide();

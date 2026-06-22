@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, Notice, TFile } from 'obsidian';
 import { FrontmatterModule } from './modules/frontmatter';
 import { ImageZoomModule } from './modules/image-zoom';
 import { DateKeywordsModule } from './modules/date-keywords';
@@ -23,13 +23,8 @@ export interface CopyLinkSettings {
 	siteUrl: string;
 }
 
-export interface TagRule {
-	keywords: string[];
-	tag: string;
-}
-
 export interface TagMatchingSettings {
-	rules: TagRule[];
+	rulesFile: string;
 	matchMode: 'word' | 'substring';
 	caseSensitive: boolean;
 	liveOnActiveNote: boolean;
@@ -82,7 +77,7 @@ const DEFAULT_SETTINGS: BloobHausSettings = {
 		siteUrl: '',
 	},
 	tagMatching: {
-		rules: [],
+		rulesFile: '_bloob-auto-tagging.md',
 		matchMode: 'word',
 		caseSensitive: false,
 		liveOnActiveNote: false,
@@ -137,7 +132,11 @@ export default class BloobHausPlugin extends Plugin {
 	/** Opens the vault tag-scan preview (used by the command and the settings button). */
 	scanVaultForTags() {
 		if (this.tagMatchingModule) this.tagMatchingModule.openScanModal();
-		else new Notice('Enable the Tag matching module in Bloob Haus settings');
+		else new Notice('Enable the Auto tagging module in Bloob Haus settings');
+	}
+
+	getTagRulesCount(): number {
+		return this.tagMatchingModule?.getRulesCount() ?? 0;
 	}
 
 	/** Commands are registered once and route to the live module (or notice if it's off). */
@@ -156,7 +155,7 @@ export default class BloobHausPlugin extends Plugin {
 			name: 'Scan vault for tags',
 			callback: () => {
 				if (this.tagMatchingModule) this.tagMatchingModule.openScanModal();
-				else new Notice('Enable the Tag matching module in Bloob Haus settings');
+				else new Notice('Enable the Auto tagging module in Bloob Haus settings');
 			},
 		});
 
@@ -364,10 +363,10 @@ class BloobHausSettingTab extends PluginSettingTab {
 					.onChange(async v => { s.siteUrl = v; await this.plugin.saveSettings(); }));
 		}
 
-		// ── Tag Matching ───────────────────────────────────────────────────────
+		// ── Auto tagging ──────────────────────────────────────────────────────
 		this.addToggle(
-			'Tag matching',
-			'Add frontmatter tags from keyword rules — live while you type, or via a vault-wide scan with preview.',
+			'Auto tagging',
+			'Adds frontmatter tags based on keyword rules defined in a vault file — live while you type, or via a vault-wide scan with preview.',
 			'tagMatching'
 		);
 
@@ -415,34 +414,24 @@ class BloobHausSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-			containerEl.createEl('p', {
-				text: 'Rules: if any keyword appears in a note, its tag is added. Keywords are comma-separated.',
-				cls: 'setting-item-description',
-			});
-
-			s.rules.forEach((rule, i) => {
-				new Setting(containerEl)
-					.addText(t => t.setPlaceholder('keywords (comma-separated)').setValue(rule.keywords.join(', ')).onChange(async v => {
-						rule.keywords = v.split(',').map(k => k.trim()).filter(Boolean);
-						await this.plugin.saveSettings();
-					}))
-					.addText(t => t.setPlaceholder('tag').setValue(rule.tag).onChange(async v => {
-						rule.tag = v;
-						await this.plugin.saveSettings();
-					}))
-					.addExtraButton(b => b.setIcon('trash').setTooltip('Remove').onClick(async () => {
-						s.rules.splice(i, 1);
-						await this.plugin.saveSettings();
-						this.display();
-					}));
-			});
+			const rulesCount = this.plugin.getTagRulesCount();
+			new Setting(containerEl)
+				.setName('Rules file')
+				.setDesc(`${rulesCount} rule${rulesCount === 1 ? '' : 's'} loaded — edit the file to add or change rules`)
+				.addText(t => t
+					.setPlaceholder('_bloob-auto-tagging.md')
+					.setValue(s.rulesFile)
+					.onChange(async v => { s.rulesFile = v.trim() || '_bloob-auto-tagging.md'; await this.plugin.saveSettings(); }))
+				.addButton(b => b.setButtonText('Open').onClick(async () => {
+					const file = this.app.vault.getAbstractFileByPath(s.rulesFile);
+					if (file instanceof TFile) {
+						await this.app.workspace.getLeaf().openFile(file);
+					} else {
+						new Notice(`Rules file not found: ${s.rulesFile}`);
+					}
+				}));
 
 			new Setting(containerEl)
-				.addButton(b => b.setButtonText('Add rule').onClick(async () => {
-					s.rules.push({ keywords: [], tag: '' });
-					await this.plugin.saveSettings();
-					this.display();
-				}))
 				.addButton(b => b.setButtonText('Scan vault now').setCta().onClick(() => {
 					this.plugin.scanVaultForTags();
 				}));

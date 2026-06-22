@@ -70,6 +70,7 @@ export class FrontmatterModule {
 
 	private async handleModify(file: TFile) {
 		if (this.isExcluded(file)) return;
+		if (!this.getSettings().trackDateUpdated) return;
 
 		try {
 			const today = this.today();

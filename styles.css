@@ -20,6 +20,17 @@
   transition: transform 0.05s ease-out;
 }
 
+.bloob-tag-scan-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  margin: 8px 0 12px;
+  padding-right: 4px;
+}
+
+.bloob-tag-scan-list .setting-item {
+  padding: 6px 0;
+}
+
 .bloob-feedback-textarea {
   width: 100%;
   min-height: 120px;

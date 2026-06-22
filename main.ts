@@ -1,8 +1,10 @@
-import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
 import { FrontmatterModule } from './modules/frontmatter';
 import { ImageZoomModule } from './modules/image-zoom';
 import { DateKeywordsModule } from './modules/date-keywords';
 import { LinkEncoderModule } from './modules/link-encoder';
+import { CopyLinkModule } from './modules/copy-link';
+import { TagMatchingModule } from './modules/tag-matching';
 import { FeedbackModal } from './ui/feedback-modal';
 
 export interface FrontmatterSettings {
@@ -10,10 +12,29 @@ export interface FrontmatterSettings {
 	significantChangeThreshold: number;
 	excludedFolders: string[];
 	creationTimeThreshold: number;
+	trackDateUpdated: boolean;
 }
 
 export interface DateKeywordsSettings {
 	replacements: Array<{ trigger: string; format: string }>;
+}
+
+export interface CopyLinkSettings {
+	siteUrl: string;
+}
+
+export interface TagRule {
+	keywords: string[];
+	tag: string;
+}
+
+export interface TagMatchingSettings {
+	rules: TagRule[];
+	matchMode: 'word' | 'substring';
+	caseSensitive: boolean;
+	liveOnActiveNote: boolean;
+	scanScope: 'body' | 'body+title';
+	excludedFolders: string[];
 }
 
 export interface BloobHausSettings {
@@ -22,9 +43,13 @@ export interface BloobHausSettings {
 		imageZoom: boolean;
 		dateKeywords: boolean;
 		linkEncoder: boolean;
+		copyLink: boolean;
+		tagMatching: boolean;
 	};
 	frontmatter: FrontmatterSettings;
 	dateKeywords: DateKeywordsSettings;
+	copyLink: CopyLinkSettings;
+	tagMatching: TagMatchingSettings;
 }
 
 const DEFAULT_SETTINGS: BloobHausSettings = {
@@ -33,12 +58,15 @@ const DEFAULT_SETTINGS: BloobHausSettings = {
 		imageZoom: true,
 		dateKeywords: false,
 		linkEncoder: false,
+		copyLink: true,
+		tagMatching: false,
 	},
 	frontmatter: {
 		bloobObjectDefault: 'note',
 		significantChangeThreshold: 20,
 		excludedFolders: ['_media', 'templates'],
 		creationTimeThreshold: 30,
+		trackDateUpdated: true,
 	},
 	dateKeywords: {
 		replacements: [
@@ -49,6 +77,17 @@ const DEFAULT_SETTINGS: BloobHausSettings = {
 			{ trigger: 'TDATE', format: '# YYYY-MM-DD' },
 			{ trigger: 'TTDATE', format: '## YYYY-MM-DD' },
 		],
+	},
+	copyLink: {
+		siteUrl: '',
+	},
+	tagMatching: {
+		rules: [],
+		matchMode: 'word',
+		caseSensitive: false,
+		liveOnActiveNote: false,
+		scanScope: 'body',
+		excludedFolders: ['_media', 'templates'],
 	},
 };
 
@@ -61,11 +100,14 @@ export default class BloobHausPlugin extends Plugin {
 	private imageZoomModule: ImageZoomModule | null = null;
 	private dateKeywordsModule: DateKeywordsModule | null = null;
 	private linkEncoderModule: LinkEncoderModule | null = null;
+	private copyLinkModule: CopyLinkModule | null = null;
+	private tagMatchingModule: TagMatchingModule | null = null;
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new BloobHausSettingTab(this.app, this));
 		this.initModules();
+		this.registerCommands();
 	}
 
 	onunload() {
@@ -73,6 +115,8 @@ export default class BloobHausPlugin extends Plugin {
 		this.imageZoomModule?.unload();
 		this.dateKeywordsModule?.unload();
 		this.linkEncoderModule?.unload();
+		this.copyLinkModule?.unload();
+		this.tagMatchingModule?.unload();
 	}
 
 	async loadSettings() {
@@ -81,11 +125,55 @@ export default class BloobHausPlugin extends Plugin {
 			modules: Object.assign({}, DEFAULT_SETTINGS.modules, saved.modules),
 			frontmatter: Object.assign({}, DEFAULT_SETTINGS.frontmatter, saved.frontmatter),
 			dateKeywords: Object.assign({}, DEFAULT_SETTINGS.dateKeywords, saved.dateKeywords),
+			copyLink: Object.assign({}, DEFAULT_SETTINGS.copyLink, saved.copyLink),
+			tagMatching: Object.assign({}, DEFAULT_SETTINGS.tagMatching, saved.tagMatching),
 		};
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	/** Opens the vault tag-scan preview (used by the command and the settings button). */
+	scanVaultForTags() {
+		if (this.tagMatchingModule) this.tagMatchingModule.openScanModal();
+		else new Notice('Enable the Tag matching module in Bloob Haus settings');
+	}
+
+	/** Commands are registered once and route to the live module (or notice if it's off). */
+	registerCommands() {
+		this.addCommand({
+			id: 'copy-page-link',
+			name: 'Copy page link',
+			callback: () => {
+				if (this.copyLinkModule) this.copyLinkModule.copyLink();
+				else new Notice('Enable the Copy link module in Bloob Haus settings');
+			},
+		});
+
+		this.addCommand({
+			id: 'scan-vault-for-tags',
+			name: 'Scan vault for tags',
+			callback: () => {
+				if (this.tagMatchingModule) this.tagMatchingModule.openScanModal();
+				else new Notice('Enable the Tag matching module in Bloob Haus settings');
+			},
+		});
+
+		this.addCommand({
+			id: 'scan-active-note-for-tags',
+			name: 'Scan current note for tags',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!this.tagMatchingModule || !file) return false;
+				if (!checking) {
+					this.tagMatchingModule.applyToFile(file).then(added => {
+						new Notice(added.length ? `Added: ${added.map(t => '#' + t).join(' ')}` : 'No new tags matched');
+					});
+				}
+				return true;
+			},
+		});
 	}
 
 	initModules() {
@@ -104,6 +192,14 @@ export default class BloobHausPlugin extends Plugin {
 		if (this.settings.modules.linkEncoder) {
 			this.linkEncoderModule = new LinkEncoderModule(this);
 			this.linkEncoderModule.load();
+		}
+		if (this.settings.modules.copyLink) {
+			this.copyLinkModule = new CopyLinkModule(this, () => this.settings.copyLink);
+			this.copyLinkModule.load();
+		}
+		if (this.settings.modules.tagMatching) {
+			this.tagMatchingModule = new TagMatchingModule(this, () => this.settings.tagMatching);
+			this.tagMatchingModule.load();
 		}
 	}
 
@@ -128,6 +224,14 @@ export default class BloobHausPlugin extends Plugin {
 			this.linkEncoderModule?.unload();
 			this.linkEncoderModule = enabled ? new LinkEncoderModule(this) : null;
 			this.linkEncoderModule?.load();
+		} else if (key === 'copyLink') {
+			this.copyLinkModule?.unload();
+			this.copyLinkModule = enabled ? new CopyLinkModule(this, () => this.settings.copyLink) : null;
+			this.copyLinkModule?.load();
+		} else if (key === 'tagMatching') {
+			this.tagMatchingModule?.unload();
+			this.tagMatchingModule = enabled ? new TagMatchingModule(this, () => this.settings.tagMatching) : null;
+			this.tagMatchingModule?.load();
 		}
 	}
 }
@@ -169,12 +273,23 @@ class BloobHausSettingTab extends PluginSettingTab {
 				}));
 
 			new Setting(containerEl)
-				.setName('Significant change threshold')
-				.setDesc('Minimum characters changed to log a date_updated entry (default: 20)')
-				.addText(t => t.setValue(String(s.significantChangeThreshold)).onChange(async v => {
-					const n = parseInt(v);
-					if (!isNaN(n) && n > 0) { s.significantChangeThreshold = n; await this.plugin.saveSettings(); }
+				.setName('Track date_updated')
+				.setDesc('Append today\'s date to date_updated when a note changes significantly. date_created on new notes is unaffected.')
+				.addToggle(t => t.setValue(s.trackDateUpdated).onChange(async v => {
+					s.trackDateUpdated = v;
+					await this.plugin.saveSettings();
+					this.display();
 				}));
+
+			if (s.trackDateUpdated) {
+				new Setting(containerEl)
+					.setName('Significant change threshold')
+					.setDesc('Minimum characters changed to log a date_updated entry (default: 20)')
+					.addText(t => t.setValue(String(s.significantChangeThreshold)).onChange(async v => {
+						const n = parseInt(v);
+						if (!isNaN(n) && n > 0) { s.significantChangeThreshold = n; await this.plugin.saveSettings(); }
+					}));
+			}
 
 			new Setting(containerEl)
 				.setName('Excluded folders')
@@ -230,6 +345,108 @@ class BloobHausSettingTab extends PluginSettingTab {
 			'Paste a file path or URL and it\'s automatically converted to a formatted markdown link.',
 			'linkEncoder'
 		);
+
+		// ── Copy Link ──────────────────────────────────────────────────────────
+		this.addToggle(
+			'Copy link',
+			'Adds a ribbon icon (and command) to copy the public Bloob Haus URL of the current note.',
+			'copyLink'
+		);
+
+		if (this.plugin.settings.modules.copyLink) {
+			const s = this.plugin.settings.copyLink;
+			new Setting(containerEl)
+				.setName('Site URL')
+				.setDesc('Your published site root, e.g. https://leons.bloob.haus — used to build the copied link.')
+				.addText(t => t
+					.setPlaceholder('https://yourdomain.com')
+					.setValue(s.siteUrl)
+					.onChange(async v => { s.siteUrl = v; await this.plugin.saveSettings(); }));
+		}
+
+		// ── Tag Matching ───────────────────────────────────────────────────────
+		this.addToggle(
+			'Tag matching',
+			'Add frontmatter tags from keyword rules — live while you type, or via a vault-wide scan with preview.',
+			'tagMatching'
+		);
+
+		if (this.plugin.settings.modules.tagMatching) {
+			const s = this.plugin.settings.tagMatching;
+
+			new Setting(containerEl)
+				.setName('Add tags live while editing')
+				.setDesc('When on, matched tags are added to the active note as you type (debounced).')
+				.addToggle(t => t.setValue(s.liveOnActiveNote).onChange(async v => {
+					s.liveOnActiveNote = v;
+					await this.plugin.saveSettings();
+				}));
+
+			new Setting(containerEl)
+				.setName('Match mode')
+				.setDesc('Whole word avoids partial hits (e.g. "art" won\'t match "cart").')
+				.addDropdown(d => d
+					.addOption('word', 'Whole word')
+					.addOption('substring', 'Substring')
+					.setValue(s.matchMode)
+					.onChange(async v => { s.matchMode = v as 'word' | 'substring'; await this.plugin.saveSettings(); }));
+
+			new Setting(containerEl)
+				.setName('Case sensitive')
+				.addToggle(t => t.setValue(s.caseSensitive).onChange(async v => {
+					s.caseSensitive = v;
+					await this.plugin.saveSettings();
+				}));
+
+			new Setting(containerEl)
+				.setName('Scan scope')
+				.setDesc('Whether to also match against the note title.')
+				.addDropdown(d => d
+					.addOption('body', 'Body only')
+					.addOption('body+title', 'Body + title')
+					.setValue(s.scanScope)
+					.onChange(async v => { s.scanScope = v as 'body' | 'body+title'; await this.plugin.saveSettings(); }));
+
+			new Setting(containerEl)
+				.setName('Excluded folders')
+				.setDesc('Comma-separated folders to skip when scanning')
+				.addText(t => t.setValue(s.excludedFolders.join(', ')).onChange(async v => {
+					s.excludedFolders = v.split(',').map(f => f.trim()).filter(Boolean);
+					await this.plugin.saveSettings();
+				}));
+
+			containerEl.createEl('p', {
+				text: 'Rules: if any keyword appears in a note, its tag is added. Keywords are comma-separated.',
+				cls: 'setting-item-description',
+			});
+
+			s.rules.forEach((rule, i) => {
+				new Setting(containerEl)
+					.addText(t => t.setPlaceholder('keywords (comma-separated)').setValue(rule.keywords.join(', ')).onChange(async v => {
+						rule.keywords = v.split(',').map(k => k.trim()).filter(Boolean);
+						await this.plugin.saveSettings();
+					}))
+					.addText(t => t.setPlaceholder('tag').setValue(rule.tag).onChange(async v => {
+						rule.tag = v;
+						await this.plugin.saveSettings();
+					}))
+					.addExtraButton(b => b.setIcon('trash').setTooltip('Remove').onClick(async () => {
+						s.rules.splice(i, 1);
+						await this.plugin.saveSettings();
+						this.display();
+					}));
+			});
+
+			new Setting(containerEl)
+				.addButton(b => b.setButtonText('Add rule').onClick(async () => {
+					s.rules.push({ keywords: [], tag: '' });
+					await this.plugin.saveSettings();
+					this.display();
+				}))
+				.addButton(b => b.setButtonText('Scan vault now').setCta().onClick(() => {
+					this.plugin.scanVaultForTags();
+				}));
+		}
 
 		// ── Feedback ───────────────────────────────────────────────────────────
 		containerEl.createEl('hr');

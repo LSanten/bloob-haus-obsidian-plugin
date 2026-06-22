@@ -6,7 +6,7 @@ A single plugin that consolidates the essentials for a smooth Obsidian notes wor
 
 | Module | Default | What it does |
 |--------|---------|-------------|
-| **Frontmatter auto-fill** | ✅ On | Adds `date_created`, `date_updated`, `tags`, and `bloob_object` to new notes |
+| **Frontmatter auto-fill** | ✅ On | Adds `bloob_object`, `date_created`, `date_updated`, and `tags` to new notes. `date_updated` is only logged on days after creation, and only when a significant change is made. |
 | **Image zoom** | ✅ On | Click any image to view fullscreen. Scroll to zoom, drag to pan |
 | **Copy link** | ✅ On | Ribbon icon + command to copy the public Bloob Haus URL of the active note |
 | **Date keywords** | ⬜ Off | Type `TODAY`, `DATE`, `TIME` etc. to insert formatted dates |

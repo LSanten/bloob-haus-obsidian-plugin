@@ -54,10 +54,10 @@ export class FrontmatterModule {
 		setTimeout(async () => {
 			try {
 				await this.app.fileManager.processFrontMatter(file, (fm) => {
+					if (!fm.bloob_object) fm.bloob_object = s.bloobObjectDefault;
 					if (!fm.date_created) fm.date_created = today;
 					if (!fm.date_updated) fm.date_updated = [];
 					if (!fm.tags) fm.tags = [];
-					if (!fm.bloob_object) fm.bloob_object = s.bloobObjectDefault;
 				});
 
 				const content = await this.app.vault.read(file);

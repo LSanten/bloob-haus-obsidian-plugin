@@ -8,8 +8,10 @@ A single plugin that consolidates the essentials for a smooth Obsidian notes wor
 |--------|---------|-------------|
 | **Frontmatter auto-fill** | ✅ On | Adds `date_created`, `date_updated`, `tags`, and `bloob_object` to new notes |
 | **Image zoom** | ✅ On | Click any image to view fullscreen. Scroll to zoom, drag to pan |
+| **Copy link** | ✅ On | Ribbon icon + command to copy the public Bloob Haus URL of the active note |
 | **Date keywords** | ⬜ Off | Type `TODAY`, `DATE`, `TIME` etc. to insert formatted dates |
 | **Link encoder** | ⬜ Off | Paste a file path or URL → auto-formatted markdown link |
+| **Tag matching** | ⬜ Off | Add frontmatter tags from keyword rules — live while you type, or via vault-wide scan with preview |
 
 ## Install via BRAT (recommended for early access)
 

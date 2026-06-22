@@ -8,7 +8,7 @@ import { TagMatchingModule } from './modules/tag-matching';
 import { FeedbackModal } from './ui/feedback-modal';
 
 export interface FrontmatterSettings {
-	bloobObjectDefault: string;
+	bloobShapeDefault: string;
 	significantChangeThreshold: number;
 	excludedFolders: string[];
 	creationTimeThreshold: number;
@@ -62,7 +62,7 @@ const DEFAULT_SETTINGS: BloobHausSettings = {
 		tagMatching: false,
 	},
 	frontmatter: {
-		bloobObjectDefault: 'note',
+		bloobShapeDefault: 'note',
 		significantChangeThreshold: 20,
 		excludedFolders: ['_media', 'templates'],
 		creationTimeThreshold: 30,
@@ -265,10 +265,10 @@ class BloobHausSettingTab extends PluginSettingTab {
 			const s = this.plugin.settings.frontmatter;
 
 			new Setting(containerEl)
-				.setName('Default bloob_object')
-				.setDesc('Value for bloob_object in new notes')
-				.addText(t => t.setValue(s.bloobObjectDefault).onChange(async v => {
-					s.bloobObjectDefault = v;
+				.setName('Default bloob-shape')
+				.setDesc('Value for bloob-shape in new notes (e.g. note, marble, article)')
+				.addText(t => t.setValue(s.bloobShapeDefault).onChange(async v => {
+					s.bloobShapeDefault = v;
 					await this.plugin.saveSettings();
 				}));
 

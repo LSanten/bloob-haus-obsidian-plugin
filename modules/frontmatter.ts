@@ -88,7 +88,7 @@ export class FrontmatterModule {
 					if (!fm.date_updated) fm.date_updated = [];
 					else if (!Array.isArray(fm.date_updated)) fm.date_updated = [fm.date_updated];
 
-					if (!fm.date_updated.includes(today)) {
+					if (!fm.date_updated.includes(today) && fm.date_created !== today) {
 						fm.date_updated.push(today);
 						snapshot.content = current;
 						snapshot.lastDateAdded = today;

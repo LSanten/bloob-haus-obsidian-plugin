@@ -89,7 +89,10 @@ export class FrontmatterModule {
 					else if (!Array.isArray(fm.date_updated)) fm.date_updated = [fm.date_updated];
 
 					if (!fm.date_updated.includes(today) && fm.date_created !== today) {
-						fm.date_updated.push(today);
+						// Prepend so the most recent date is always first (newest-first).
+						// Keeps long lists readable in the YAML; the website picks the
+						// latest by value regardless of order.
+						fm.date_updated.unshift(today);
 						snapshot.content = current;
 						snapshot.lastDateAdded = today;
 					}

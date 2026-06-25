@@ -1,6 +1,6 @@
 {
   "name": "bloob-haus-obsidian-plugin",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "description": "Notes workflow tools for Bloob Haus",
   "main": "main.js",
   "scripts": {

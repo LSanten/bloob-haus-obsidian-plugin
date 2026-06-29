@@ -40,14 +40,25 @@ Obsidian and BRAT match the GitHub **release tag** to the `version` in
 # 2. Build and verify
 npm run build
 grep -c "<something from your change>" main.js   # sanity-check the bundle
-# 3. Commit the version bump and push
-git add manifest.json package.json versions.json
+# 3. Update docs/design-notes.md — record any new trade-off/limitation this
+#    release introduces, move resolved considerations, add a line to the
+#    "Release-to-consideration log". (See "Design notes" section below.)
+# 4. Commit the version bump and push
+git add manifest.json package.json versions.json docs/design-notes.md
 git commit -m "chore(release): bump to X.Y.Z"
 git push origin main
-# 4. Cut the release — tag == version, NO v prefix
+# 5. Cut the release — tag == version, NO v prefix
 gh release create X.Y.Z main.js manifest.json styles.css \
   --title "X.Y.Z" --notes "..." --target main
 ```
+
+## Design notes — read before touching a module
+
+`docs/design-notes.md` is the living record of deliberate trade-offs, known
+limitations, and ideas worth revisiting (e.g. why custom-field values split on
+commas, why rejected-tag memory is per-note not per-folder). **Read it before
+changing a module** so you don't "fix" something that was decided on purpose,
+and **update it on every release** (step 3 of the release checklist above).
 
 ## Conventions this plugin writes (keep aligned with the webapp builder)
 - `bloob-shape`, `date_created` (plain `YYYY-MM-DD`), `date_updated` (list),

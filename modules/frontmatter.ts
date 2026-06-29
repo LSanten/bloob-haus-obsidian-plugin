@@ -54,10 +54,17 @@ export class FrontmatterModule {
 		setTimeout(async () => {
 			try {
 				await this.app.fileManager.processFrontMatter(file, (fm) => {
-					if (!fm['bloob-shape']) fm['bloob-shape'] = s.bloobShapeDefault;
+					if (s.addBloobShape && !fm['bloob-shape']) fm['bloob-shape'] = s.bloobShapeDefault;
 					if (!fm.date_created) fm.date_created = today;
 					if (!fm.date_updated) fm.date_updated = [];
 					if (!fm.tags) fm.tags = [];
+
+					// User-defined fields (e.g. website-status: unlisted). Only set keys
+					// that aren't already present so we never clobber existing values.
+					for (const field of s.customFields || []) {
+						const key = field.key.trim();
+						if (key && !(key in fm)) fm[key] = this.parseFieldValue(field.value);
+					}
 				});
 
 				const content = await this.app.vault.read(file);
@@ -118,6 +125,19 @@ export class FrontmatterModule {
 
 	private stripFrontmatter(content: string): string {
 		return content.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, '');
+	}
+
+	/**
+	 * Interprets a user-supplied field value. Plain strings pass through, but a
+	 * comma-separated value becomes a YAML list (e.g. "a, b" → [a, b]) so users
+	 * can seed list fields like aliases. Leave a single value to keep it scalar.
+	 */
+	private parseFieldValue(raw: string): string | string[] {
+		const value = (raw ?? '').trim();
+		if (value.includes(',')) {
+			return value.split(',').map(v => v.trim()).filter(Boolean);
+		}
+		return value;
 	}
 
 	private today(): string {

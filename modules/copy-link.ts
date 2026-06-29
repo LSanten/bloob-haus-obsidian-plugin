@@ -11,6 +11,8 @@ import { CopyLinkSettings } from '../main';
  * - Spaces → hyphens, per path segment
  * - No slugify, no encodeURIComponent — just the space→hyphen replacement
  * - Folder structure maps directly to the URL path
+ * - A folder index (`_index.md` / `index.md`) resolves to the folder URL itself,
+ *   i.e. the index segment is dropped (e.g. `projects/_index.md` → `…/projects/`).
  */
 export class CopyLinkModule {
 	private ribbonEl: HTMLElement | null = null;
@@ -41,12 +43,17 @@ export class CopyLinkModule {
 
 		// Vault-relative path, minus the .md extension, e.g. "marbles/My Note.md" → "marbles/My Note"
 		const rel = file.path.replace(/\.md$/i, '');
-		const urlPath = rel
+		let segments = rel
 			.split('/')
-			.map(seg => seg.replace(/ /g, '-')) // spaces → hyphens; preserve case
-			.join('/');
+			.map(seg => seg.replace(/ /g, '-')); // spaces → hyphens; preserve case
 
-		const url = `${base}/${urlPath}/`;
+		// A folder index resolves to the folder itself: drop a trailing _index/index.
+		if (segments.length && /^_?index$/i.test(segments[segments.length - 1])) {
+			segments = segments.slice(0, -1);
+		}
+
+		const urlPath = segments.join('/');
+		const url = urlPath ? `${base}/${urlPath}/` : `${base}/`;
 		await navigator.clipboard.writeText(url);
 		new Notice(`Copied: ${url}`);
 	}

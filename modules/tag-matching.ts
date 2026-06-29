@@ -1,5 +1,5 @@
 import { App, Plugin, TFile, EventRef, Notice, getAllTags, debounce, Debouncer } from 'obsidian';
-import { TagMatchingSettings } from '../main';
+import { TagMatchingSettings, TagMemory } from '../main';
 
 interface TagRule {
 	keywords: string[];
@@ -29,10 +29,16 @@ Keywords in the first column are comma-separated; the second column is the tag t
 export class TagMatchingModule {
 	private app: App;
 	private eventRefs: EventRef[] = [];
+	private metaRefs: EventRef[] = [];
 	private debouncedLive: Debouncer<[TFile], void>;
 	private rules: TagRule[] = [];
 
-	constructor(private plugin: Plugin, private getSettings: () => TagMatchingSettings) {
+	constructor(
+		private plugin: Plugin,
+		private getSettings: () => TagMatchingSettings,
+		private getMemory: () => TagMemory,
+		private saveMemory: () => Promise<void>,
+	) {
 		this.app = plugin.app;
 		this.debouncedLive = debounce((file: TFile) => { void this.applyToFile(file); }, 1500, false);
 	}
@@ -59,11 +65,30 @@ export class TagMatchingModule {
 			}
 		});
 		this.eventRefs.push(createRef);
+
+		// Watch metadata changes to reconcile rejected-tag memory: a user removing
+		// an auto-added tag means "don't add it here again", and re-adding it clears
+		// that rejection. Runs independently of live tagging.
+		const metaRef = this.app.metadataCache.on('changed', (file) => {
+			if (file instanceof TFile && file.extension === 'md') this.reconcileMemory(file);
+		});
+		this.metaRefs.push(metaRef);
+
+		// Keep memory keys in sync with the vault on rename/delete.
+		const renameRef = this.app.vault.on('rename', (file, oldPath) => {
+			if (file instanceof TFile) void this.renameMemory(oldPath, file.path);
+		});
+		const deleteRef = this.app.vault.on('delete', (file) => {
+			if (file instanceof TFile) void this.deleteMemory(file.path);
+		});
+		this.eventRefs.push(renameRef, deleteRef);
 	}
 
 	unload() {
 		for (const r of this.eventRefs) this.app.vault.offref(r);
+		for (const r of this.metaRefs) this.app.metadataCache.offref(r);
 		this.eventRefs = [];
+		this.metaRefs = [];
 	}
 
 	getRulesCount(): number {
@@ -175,7 +200,10 @@ export class TagMatchingModule {
 		const candidates = this.matchTags(text);
 		if (candidates.length === 0) return [];
 		const existing = this.existingTags(file);
-		return candidates.filter(t => !existing.has(t));
+		const rejected = this.getSettings().rememberRejected
+			? new Set(this.getMemory().rejected[file.path] || [])
+			: new Set<string>();
+		return candidates.filter(t => !existing.has(t) && !rejected.has(t));
 	}
 
 	// ── Apply ────────────────────────────────────────────────────────────────
@@ -193,6 +221,78 @@ export class TagMatchingModule {
 			const current = this.normalizeFmTags(fm.tags);
 			fm.tags = [...new Set([...current, ...toAdd])];
 		});
+		await this.recordAutoAdded(file.path, toAdd);
+	}
+
+	// ── Rejected-tag memory ──────────────────────────────────────────────────
+
+	/** Remembers tags we wrote, so a later removal can be detected as a rejection. */
+	private async recordAutoAdded(path: string, toAdd: string[]) {
+		if (!this.getSettings().rememberRejected || toAdd.length === 0) return;
+		const mem = this.getMemory();
+		const auto = new Set(mem.autoAdded[path] || []);
+		const rejected = new Set(mem.rejected[path] || []);
+		for (const t of toAdd) {
+			auto.add(t);
+			rejected.delete(t); // adding it back overrides any prior rejection
+		}
+		mem.autoAdded[path] = [...auto];
+		this.assign(mem.rejected, path, rejected);
+		await this.saveMemory();
+	}
+
+	/**
+	 * Reconciles memory against the note's current tags:
+	 *  - an auto-added tag that's now gone → the user removed it → reject it
+	 *  - a rejected tag that's present again → the user re-added it → un-reject
+	 */
+	private reconcileMemory(file: TFile) {
+		if (!this.getSettings().rememberRejected) return;
+		const path = file.path;
+		const mem = this.getMemory();
+		const auto = new Set(mem.autoAdded[path] || []);
+		const rejected = new Set(mem.rejected[path] || []);
+		if (auto.size === 0 && rejected.size === 0) return;
+
+		const current = this.existingTags(file);
+		let changed = false;
+
+		for (const t of [...auto]) {
+			if (!current.has(t)) { auto.delete(t); rejected.add(t); changed = true; }
+		}
+		for (const t of [...rejected]) {
+			if (current.has(t)) { rejected.delete(t); changed = true; }
+		}
+
+		if (changed) {
+			this.assign(mem.autoAdded, path, auto);
+			this.assign(mem.rejected, path, rejected);
+			void this.saveMemory();
+		}
+	}
+
+	private async renameMemory(oldPath: string, newPath: string) {
+		const mem = this.getMemory();
+		let changed = false;
+		for (const store of [mem.autoAdded, mem.rejected]) {
+			if (store[oldPath]) { store[newPath] = store[oldPath]; delete store[oldPath]; changed = true; }
+		}
+		if (changed) await this.saveMemory();
+	}
+
+	private async deleteMemory(path: string) {
+		const mem = this.getMemory();
+		let changed = false;
+		for (const store of [mem.autoAdded, mem.rejected]) {
+			if (store[path]) { delete store[path]; changed = true; }
+		}
+		if (changed) await this.saveMemory();
+	}
+
+	/** Stores a set under a path key, dropping the key entirely when empty. */
+	private assign(store: Record<string, string[]>, path: string, set: Set<string>) {
+		if (set.size === 0) delete store[path];
+		else store[path] = [...set];
 	}
 
 	// ── Vault scan (preview-first) ───────────────────────────────────────────

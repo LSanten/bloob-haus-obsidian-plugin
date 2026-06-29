@@ -7,12 +7,19 @@ import { CopyLinkModule } from './modules/copy-link';
 import { TagMatchingModule } from './modules/tag-matching';
 import { FeedbackModal } from './ui/feedback-modal';
 
+export interface CustomFrontmatterField {
+	key: string;
+	value: string;
+}
+
 export interface FrontmatterSettings {
+	addBloobShape: boolean;
 	bloobShapeDefault: string;
 	significantChangeThreshold: number;
 	excludedFolders: string[];
 	creationTimeThreshold: number;
 	trackDateUpdated: boolean;
+	customFields: CustomFrontmatterField[];
 }
 
 export interface DateKeywordsSettings {
@@ -30,6 +37,18 @@ export interface TagMatchingSettings {
 	liveOnActiveNote: boolean;
 	scanScope: 'body' | 'body+title';
 	excludedFolders: string[];
+	rememberRejected: boolean;
+}
+
+/**
+ * Persistent per-note auto-tagging memory (keyed by vault-relative path).
+ * - `autoAdded`: tags this plugin wrote, so we can tell when the user removes one.
+ * - `rejected`: tags the user removed after we added them — never auto-add again
+ *   until the user manually re-adds the tag (which clears it from here).
+ */
+export interface TagMemory {
+	autoAdded: Record<string, string[]>;
+	rejected: Record<string, string[]>;
 }
 
 export interface BloobHausSettings {
@@ -45,6 +64,7 @@ export interface BloobHausSettings {
 	dateKeywords: DateKeywordsSettings;
 	copyLink: CopyLinkSettings;
 	tagMatching: TagMatchingSettings;
+	tagMemory: TagMemory;
 }
 
 const DEFAULT_SETTINGS: BloobHausSettings = {
@@ -57,11 +77,13 @@ const DEFAULT_SETTINGS: BloobHausSettings = {
 		tagMatching: false,
 	},
 	frontmatter: {
+		addBloobShape: true,
 		bloobShapeDefault: 'note',
 		significantChangeThreshold: 20,
 		excludedFolders: ['_media', 'templates'],
 		creationTimeThreshold: 30,
 		trackDateUpdated: true,
+		customFields: [],
 	},
 	dateKeywords: {
 		replacements: [
@@ -83,6 +105,11 @@ const DEFAULT_SETTINGS: BloobHausSettings = {
 		liveOnActiveNote: false,
 		scanScope: 'body',
 		excludedFolders: ['_media', 'templates'],
+		rememberRejected: true,
+	},
+	tagMemory: {
+		autoAdded: {},
+		rejected: {},
 	},
 };
 
@@ -122,6 +149,7 @@ export default class BloobHausPlugin extends Plugin {
 			dateKeywords: Object.assign({}, DEFAULT_SETTINGS.dateKeywords, saved.dateKeywords),
 			copyLink: Object.assign({}, DEFAULT_SETTINGS.copyLink, saved.copyLink),
 			tagMatching: Object.assign({}, DEFAULT_SETTINGS.tagMatching, saved.tagMatching),
+			tagMemory: Object.assign({}, DEFAULT_SETTINGS.tagMemory, saved.tagMemory),
 		};
 	}
 
@@ -197,9 +225,18 @@ export default class BloobHausPlugin extends Plugin {
 			this.copyLinkModule.load();
 		}
 		if (this.settings.modules.tagMatching) {
-			this.tagMatchingModule = new TagMatchingModule(this, () => this.settings.tagMatching);
+			this.tagMatchingModule = this.createTagMatchingModule();
 			this.tagMatchingModule.load();
 		}
+	}
+
+	private createTagMatchingModule(): TagMatchingModule {
+		return new TagMatchingModule(
+			this,
+			() => this.settings.tagMatching,
+			() => this.settings.tagMemory,
+			() => this.saveSettings(),
+		);
 	}
 
 	toggleModule(key: ModuleKey, enabled: boolean) {
@@ -229,7 +266,7 @@ export default class BloobHausPlugin extends Plugin {
 			this.copyLinkModule?.load();
 		} else if (key === 'tagMatching') {
 			this.tagMatchingModule?.unload();
-			this.tagMatchingModule = enabled ? new TagMatchingModule(this, () => this.settings.tagMatching) : null;
+			this.tagMatchingModule = enabled ? this.createTagMatchingModule() : null;
 			this.tagMatchingModule?.load();
 		}
 	}
@@ -256,7 +293,7 @@ class BloobHausSettingTab extends PluginSettingTab {
 		// ── Frontmatter ────────────────────────────────────────────────────────
 		this.addToggle(
 			'Frontmatter auto-fill',
-			'Adds date_created, date_updated, tags, and bloob_object to new notes automatically.',
+			'Adds date_created, date_updated, tags, bloob-shape, and any custom fields to new notes automatically.',
 			'frontmatter'
 		);
 
@@ -264,12 +301,23 @@ class BloobHausSettingTab extends PluginSettingTab {
 			const s = this.plugin.settings.frontmatter;
 
 			new Setting(containerEl)
-				.setName('Default bloob-shape')
-				.setDesc('Value for bloob-shape in new notes (e.g. note, marble, article)')
-				.addText(t => t.setValue(s.bloobShapeDefault).onChange(async v => {
-					s.bloobShapeDefault = v;
+				.setName('Add bloob-shape')
+				.setDesc('Write bloob-shape to new notes. Only needed when publishing to a Bloob Haus site — turn off to keep YAML minimal.')
+				.addToggle(t => t.setValue(s.addBloobShape).onChange(async v => {
+					s.addBloobShape = v;
 					await this.plugin.saveSettings();
+					this.display();
 				}));
+
+			if (s.addBloobShape) {
+				new Setting(containerEl)
+					.setName('Default bloob-shape')
+					.setDesc('Value for bloob-shape in new notes (e.g. note, marble, article)')
+					.addText(t => t.setValue(s.bloobShapeDefault).onChange(async v => {
+						s.bloobShapeDefault = v;
+						await this.plugin.saveSettings();
+					}));
+			}
 
 			new Setting(containerEl)
 				.setName('Track date_updated')
@@ -297,6 +345,28 @@ class BloobHausSettingTab extends PluginSettingTab {
 					s.excludedFolders = v.split(',').map(f => f.trim()).filter(Boolean);
 					await this.plugin.saveSettings();
 				}));
+
+			new Setting(containerEl)
+				.setName('Custom fields')
+				.setDesc('Extra frontmatter added to every new note, e.g. key "website-status", value "unlisted". A comma-separated value becomes a list.')
+				.setHeading();
+
+			s.customFields.forEach((field, i) => {
+				new Setting(containerEl)
+					.addText(t => t.setPlaceholder('key (e.g. website-status)').setValue(field.key).onChange(async v => { field.key = v; await this.plugin.saveSettings(); }))
+					.addText(t => t.setPlaceholder('value (e.g. unlisted)').setValue(field.value).onChange(async v => { field.value = v; await this.plugin.saveSettings(); }))
+					.addExtraButton(b => b.setIcon('trash').setTooltip('Remove').onClick(async () => {
+						s.customFields.splice(i, 1);
+						await this.plugin.saveSettings();
+						this.display();
+					}));
+			});
+
+			new Setting(containerEl).addButton(b => b.setButtonText('Add field').setCta().onClick(async () => {
+				s.customFields.push({ key: '', value: '' });
+				await this.plugin.saveSettings();
+				this.display();
+			}));
 		}
 
 		// ── Image Zoom ─────────────────────────────────────────────────────────
@@ -378,6 +448,14 @@ class BloobHausSettingTab extends PluginSettingTab {
 				.setDesc('When on, matched tags are added to the active note as you type (debounced).')
 				.addToggle(t => t.setValue(s.liveOnActiveNote).onChange(async v => {
 					s.liveOnActiveNote = v;
+					await this.plugin.saveSettings();
+				}));
+
+			new Setting(containerEl)
+				.setName('Remember removed tags')
+				.setDesc('If you delete an auto-added tag from a note, don\'t add it there again. Re-adding the tag yourself clears that memory.')
+				.addToggle(t => t.setValue(s.rememberRejected).onChange(async v => {
+					s.rememberRejected = v;
 					await this.plugin.saveSettings();
 				}));
 

@@ -4,6 +4,7 @@ import { ImageZoomModule } from './modules/image-zoom';
 import { DateKeywordsModule } from './modules/date-keywords';
 import { LinkEncoderModule } from './modules/link-encoder';
 import { CopyLinkModule } from './modules/copy-link';
+import { readBloobUrlSettings } from './modules/bloob-url';
 import { TagMatchingModule } from './modules/tag-matching';
 import { FeedbackModal } from './ui/feedback-modal';
 
@@ -424,9 +425,21 @@ class BloobHausSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.modules.copyLink) {
 			const s = this.plugin.settings.copyLink;
+
+			// Show what the vault itself declares, so it's obvious where the URL
+			// rules come from and that this setting is only a fallback.
+			const urlSettings = readBloobUrlSettings(this.plugin.app);
 			new Setting(containerEl)
-				.setName('Site URL')
-				.setDesc('Your published site root, e.g. https://leons.bloob.haus — used to build the copied link.')
+				.setName('URL rules')
+				.setDesc(
+					urlSettings.found
+						? `From _bloob-settings.md — base: ${urlSettings.base || '(not set)'}, case: ${urlSettings.case}, date prefix: ${urlSettings.datePrefix}${urlSettings.mountPath ? `, mount: /${urlSettings.mountPath}` : ''}`
+						: 'No url: block found in _bloob-settings.md — falling back to the Site URL below, with preserve-case rules.',
+				);
+
+			new Setting(containerEl)
+				.setName('Site URL (fallback)')
+				.setDesc('Used only when _bloob-settings.md declares no url.base, e.g. https://leons.bloob.haus')
 				.addText(t => t
 					.setPlaceholder('https://yourdomain.com')
 					.setValue(s.siteUrl)

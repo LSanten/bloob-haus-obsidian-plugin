@@ -1,18 +1,23 @@
 import { Plugin, Notice } from 'obsidian';
 import { CopyLinkSettings } from '../main';
+import { readBloobUrlSettings, buildUrl } from './bloob-url';
 
 /**
  * Copy Link — adds an always-visible ribbon icon (and a command) that copies the
  * public Bloob Haus URL for the active note to the clipboard.
  *
- * URL construction matches the webapp pipeline (confirmed in the v1 plan):
- *   https://{siteUrl}/{vault-relative-path-without-ext}/
- * - Case is PRESERVED (no lowercasing)
- * - Spaces → hyphens, per path segment
- * - No slugify, no encodeURIComponent — just the space→hyphen replacement
- * - Folder structure maps directly to the URL path
- * - A folder index (`_index.md` / `index.md`) resolves to the folder URL itself,
- *   i.e. the index segment is dropped (e.g. `projects/_index.md` → `…/projects/`).
+ * The URL is built from the vault's own `_bloob-settings.md` → `url:` block
+ * (base, case, date_prefix, mount_path), so the copied link matches what the
+ * webapp deploys for THIS vault. See `modules/bloob-url.ts` for the algorithm
+ * and `bloob-haus-webapp/docs/architecture/urls-and-ids.md` for the spec.
+ *
+ * This module used to hardcode preserve-case + spaces→hyphens, which produced
+ * wrong links on any `case: lower` site (e.g. melt, buffbaby): it would hand you
+ * `melt.bloob.haus/Resources/Playlists/` for a page deployed at
+ * `melt.bloob.haus/resources/playlists/`.
+ *
+ * The plugin's manual "Site URL" setting is now only a FALLBACK, used when the
+ * vault declares no `url.base`.
  */
 export class CopyLinkModule {
 	private ribbonEl: HTMLElement | null = null;
@@ -35,25 +40,17 @@ export class CopyLinkModule {
 			return;
 		}
 
-		const base = (this.getSettings().siteUrl || '').trim().replace(/\/+$/, '');
-		if (!base) {
-			new Notice('Set your site URL in Bloob Haus settings first');
+		const urlSettings = readBloobUrlSettings(this.plugin.app);
+		const fallbackBase = (this.getSettings().siteUrl || '').trim();
+
+		if (!urlSettings.base && !fallbackBase) {
+			new Notice(
+				'No site URL found. Add a `url.base` to _bloob-settings.md, or set Site URL in Bloob Haus settings.',
+			);
 			return;
 		}
 
-		// Vault-relative path, minus the .md extension, e.g. "marbles/My Note.md" → "marbles/My Note"
-		const rel = file.path.replace(/\.md$/i, '');
-		let segments = rel
-			.split('/')
-			.map(seg => seg.replace(/ /g, '-')); // spaces → hyphens; preserve case
-
-		// A folder index resolves to the folder itself: drop a trailing _index/index.
-		if (segments.length && /^_?index$/i.test(segments[segments.length - 1])) {
-			segments = segments.slice(0, -1);
-		}
-
-		const urlPath = segments.join('/');
-		const url = urlPath ? `${base}/${urlPath}/` : `${base}/`;
+		const url = buildUrl(file.path, urlSettings, fallbackBase);
 		await navigator.clipboard.writeText(url);
 		new Notice(`Copied: ${url}`);
 	}

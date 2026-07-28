@@ -50,6 +50,27 @@ touching a module and know what was decided on purpose vs. what's still open.
 - Default **on** to preserve existing behavior. Off keeps YAML minimal for users
   who don't publish to a Bloob Haus site. No known follow-ups.
 
+### Copy link — slug rules are duplicated, not shared (`modules/bloob-url.ts`)
+- The canonical URL contract lives in the webapp
+  (`bloob-haus-webapp/docs/architecture/urls-and-ids.md`), and its spec says
+  *"Do not reimplement — reuse it."* We reimplement anyway: the plugin ships to
+  Obsidian via BRAT and cannot import from the webapp repo without publishing a
+  shared npm package, which is not worth it for ~20 lines.
+- **The mitigation is that the duplication is exact and labelled.**
+  `slugifyLower` / `slugifyPreserve` are character-for-character ports of
+  `slug-strategy.js`, and `bloob-url.ts` says so at the top.
+- **Follow-up if this ever drifts:** publish `@bloob-haus/url` as a tiny package
+  consumed by both repos. Until then, any change to the webapp's slug functions
+  must be mirrored here in the same PR.
+- Verified in sync on 2026-07-28 by diffing plugin output against the webapp's
+  `buildFileIndex` for every publishable note in marbles, buffbaby and melt
+  (556 pages, 0 mismatches).
+
+### Copy link — vault settings are read live, not cached
+- `readBloobUrlSettings()` hits `metadataCache` on every copy. That's cheap (the
+  frontmatter is already parsed) and means edits to `_bloob-settings.md` take
+  effect immediately, with no reload. Revisit only if profiling says otherwise.
+
 ---
 
 ## Resolved
@@ -61,3 +82,6 @@ touching a module and know what was decided on purpose vs. what's still open.
 ## Release-to-consideration log
 <!-- One line per release: what design notes it touched. -->
 - **1.1.0** — Added all considerations above (issues #1–#4 shipped).
+- **1.2.0** — Copy link now implements the webapp's URL contract by reading the
+  vault's `_bloob-settings.md` → `url:` block (issue #5). Added two copy-link
+  considerations: duplicated slug rules, and live (uncached) settings reads.

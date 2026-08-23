@@ -1,7 +1,7 @@
 {
   "id": "bloob-haus",
   "name": "Bloob Haus",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "minAppVersion": "1.4.0",
   "description": "Notes workflow tools for Bloob Haus \u2014 frontmatter auto-fill, image zoom, date keywords, and link encoding.",
   "author": "Leon Santen",

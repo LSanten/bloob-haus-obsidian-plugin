@@ -6,6 +6,7 @@ import { LinkEncoderModule } from './modules/link-encoder';
 import { CopyLinkModule } from './modules/copy-link';
 import { readBloobUrlSettings } from './modules/bloob-url';
 import { TagMatchingModule } from './modules/tag-matching';
+import { describeOutcome } from './modules/tag-rules.ts';
 import { FeedbackModal } from './ui/feedback-modal';
 
 export interface CustomFrontmatterField {
@@ -195,8 +196,8 @@ export default class BloobHausPlugin extends Plugin {
 				const file = this.app.workspace.getActiveFile();
 				if (!this.tagMatchingModule || !file) return false;
 				if (!checking) {
-					this.tagMatchingModule.applyToFile(file).then(added => {
-						new Notice(added.length ? `Added: ${added.map(t => '#' + t).join(' ')}` : 'No new tags matched');
+					this.tagMatchingModule.applyToFile(file).then(outcome => {
+						new Notice(describeOutcome(outcome));
 					});
 				}
 				return true;
@@ -458,10 +459,13 @@ class BloobHausSettingTab extends PluginSettingTab {
 
 			new Setting(containerEl)
 				.setName('Add tags live while editing')
-				.setDesc('When on, matched tags are added to the active note as you type (debounced).')
+				.setDesc(s.liveOnActiveNote
+					? 'Matched tags are added to the active note as you type (a couple of seconds after you stop).'
+					: 'Off — typing a keyword will NOT tag the note. Use "Scan current note for tags" or "Scan vault now" below.')
 				.addToggle(t => t.setValue(s.liveOnActiveNote).onChange(async v => {
 					s.liveOnActiveNote = v;
 					await this.plugin.saveSettings();
+					this.display();   // the description above changes with the toggle
 				}));
 
 			new Setting(containerEl)

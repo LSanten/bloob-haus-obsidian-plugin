@@ -10,7 +10,13 @@
     "importHelpers": true,
     "isolatedModules": true,
     "strictNullChecks": true,
-    "lib": ["ES6", "DOM"]
+    "lib": [
+      "ES6",
+      "DOM"
+    ],
+    "allowImportingTsExtensions": true
   },
-  "include": ["**/*.ts"]
+  "include": [
+    "**/*.ts"
+  ]
 }

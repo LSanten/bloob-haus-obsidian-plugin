@@ -1,19 +1,17 @@
 import { App, Plugin, TFile, EventRef, Notice, getAllTags, debounce, Debouncer } from 'obsidian';
 import { TagMatchingSettings, TagMemory } from '../main';
-
-interface TagRule {
-	keywords: string[];
-	tag: string;
-}
-
-const RULES_FILE_TEMPLATE = `## Auto tagging rules
-
-Add rows to this table to automatically tag notes when keywords are found.
-Keywords in the first column are comma-separated; the second column is the tag to apply (with or without #).
-
-| To scan for | To be tagged with |
-| ----------- | ----------------- |
-`;
+import {
+	RULES_FILE_TEMPLATE,
+	describeOutcome,
+	excludedFolderFor,
+	isExcludedPath,
+	matchTags,
+	normalizeFmTags,
+	parseRulesFile,
+	stripFrontmatter,
+	type TagOutcome,
+	type TagRule,
+} from './tag-rules.ts';
 
 /**
  * Auto tagging — adds frontmatter tags based on keyword→tag rules defined in a vault file.
@@ -40,7 +38,7 @@ export class TagMatchingModule {
 		private saveMemory: () => Promise<void>,
 	) {
 		this.app = plugin.app;
-		this.debouncedLive = debounce((file: TFile) => { void this.applyToFile(file); }, 1500, false);
+		this.debouncedLive = debounce((file: TFile) => { void this.applyLive(file); }, 1500, false);
 	}
 
 	load() {
@@ -117,67 +115,10 @@ export class TagMatchingModule {
 			return;
 		}
 		const content = await this.app.vault.read(file);
-		this.rules = this.parseRulesFile(content);
-	}
-
-	private parseRulesFile(content: string): TagRule[] {
-		const lines = content.split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
-		const sepIdx = lines.findIndex(l => l.includes('---'));
-		if (sepIdx === -1) return [];
-
-		return lines.slice(sepIdx + 1).flatMap(line => {
-			const cols = line.split('|').slice(1, -1).map(c => c.trim());
-			if (cols.length < 2) return [];
-			const keywords = cols[0].split(',').map(k => k.trim()).filter(Boolean);
-			const tag = cols[1];
-			if (!keywords.length || !tag) return [];
-			return [{ keywords, tag }];
-		});
+		this.rules = parseRulesFile(content);
 	}
 
 	// ── Rule engine ──────────────────────────────────────────────────────────
-
-	private matchTags(text: string): string[] {
-		const s = this.getSettings();
-		const found = new Set<string>();
-
-		for (const rule of this.rules) {
-			const tag = this.normalizeTag(rule.tag);
-			if (!tag) continue;
-			for (const kw of rule.keywords) {
-				const keyword = kw.trim();
-				if (!keyword) continue;
-				if (this.textMatches(text, keyword, s.matchMode, s.caseSensitive)) {
-					found.add(tag);
-					break;
-				}
-			}
-		}
-		return [...found];
-	}
-
-	private textMatches(text: string, keyword: string, mode: 'word' | 'substring', caseSensitive: boolean): boolean {
-		const flags = caseSensitive ? '' : 'i';
-		const esc = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		if (mode === 'substring') {
-			return new RegExp(esc, flags).test(text);
-		}
-		return new RegExp(`\\b${esc}\\b`, flags).test(text);
-	}
-
-	private normalizeTag(tag: string): string {
-		return (tag || '').trim().replace(/^#/, '');
-	}
-
-	private normalizeFmTags(raw: unknown): string[] {
-		if (!raw) return [];
-		const arr: unknown[] = Array.isArray(raw)
-			? raw
-			: typeof raw === 'string'
-				? raw.split(',')
-				: [];
-		return arr.map(t => String(t).trim().replace(/^#/, '')).filter(Boolean);
-	}
 
 	private existingTags(file: TFile): Set<string> {
 		const cache = this.app.metadataCache.getFileCache(file);
@@ -185,40 +126,60 @@ export class TagMatchingModule {
 		return new Set(all.map(t => t.replace(/^#/, '')));
 	}
 
-	private stripFrontmatter(content: string): string {
-		return content.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, '');
+	private isExcluded(file: TFile): boolean {
+		return isExcludedPath(file.path, this.getSettings().excludedFolders);
 	}
 
-	private isExcluded(file: TFile): boolean {
-		return this.getSettings().excludedFolders.some(f => f && file.path.startsWith(f));
+	/** Works out what should happen to `file` — and, when nothing does, why. */
+	private async evaluate(file: TFile): Promise<TagOutcome> {
+		const s = this.getSettings();
+		if (this.rules.length === 0) return { kind: 'no-rules', rulesFile: s.rulesFile };
+
+		const folder = excludedFolderFor(file.path, s.excludedFolders);
+		if (folder) return { kind: 'excluded', folder };
+
+		const content = await this.app.vault.read(file);
+		const body = stripFrontmatter(content);
+		const text = s.scanScope === 'body+title' ? `${file.basename}\n${body}` : body;
+		const candidates = matchTags(this.rules, text, s.matchMode, s.caseSensitive);
+		if (candidates.length === 0) return { kind: 'no-match' };
+
+		const existing = this.existingTags(file);
+		const rejected = s.rememberRejected
+			? new Set(this.getMemory().rejected[file.path] || [])
+			: new Set<string>();
+
+		const toAdd = candidates.filter(t => !existing.has(t) && !rejected.has(t));
+		if (toAdd.length > 0) return { kind: 'added', tags: toAdd };
+
+		const suppressed = candidates.filter(t => !existing.has(t) && rejected.has(t));
+		if (suppressed.length > 0) return { kind: 'suppressed', tags: suppressed };
+
+		return { kind: 'already-tagged', tags: candidates };
 	}
 
 	private async computeAdditions(file: TFile): Promise<string[]> {
-		const content = await this.app.vault.read(file);
-		const body = this.stripFrontmatter(content);
-		const text = this.getSettings().scanScope === 'body+title' ? `${file.basename}\n${body}` : body;
-		const candidates = this.matchTags(text);
-		if (candidates.length === 0) return [];
-		const existing = this.existingTags(file);
-		const rejected = this.getSettings().rememberRejected
-			? new Set(this.getMemory().rejected[file.path] || [])
-			: new Set<string>();
-		return candidates.filter(t => !existing.has(t) && !rejected.has(t));
+		const outcome = await this.evaluate(file);
+		return outcome.kind === 'added' ? outcome.tags : [];
 	}
 
 	// ── Apply ────────────────────────────────────────────────────────────────
 
-	async applyToFile(file: TFile): Promise<string[]> {
-		if (this.isExcluded(file)) return [];
-		const toAdd = await this.computeAdditions(file);
-		if (toAdd.length === 0) return [];
-		await this.writeTags(file, toAdd);
-		return toAdd;
+	async applyToFile(file: TFile): Promise<TagOutcome> {
+		const outcome = await this.evaluate(file);
+		if (outcome.kind === 'added') await this.writeTags(file, outcome.tags);
+		return outcome;
+	}
+
+	/** Live tagging is fire-and-forget, so it announces only when it acts. */
+	private async applyLive(file: TFile) {
+		const outcome = await this.applyToFile(file);
+		if (outcome.kind === 'added') new Notice(describeOutcome(outcome));
 	}
 
 	private async writeTags(file: TFile, toAdd: string[]) {
 		await this.app.fileManager.processFrontMatter(file, (fm) => {
-			const current = this.normalizeFmTags(fm.tags);
+			const current = normalizeFmTags(fm.tags);
 			fm.tags = [...new Set([...current, ...toAdd])];
 		});
 		await this.recordAutoAdded(file.path, toAdd);
@@ -309,7 +270,7 @@ export class TagMatchingModule {
 
 	async openScanModal() {
 		if (this.rules.length === 0) {
-			new Notice(`No rules found in ${this.getSettings().rulesFile} — add some rows to the table first`);
+			new Notice(describeOutcome({ kind: 'no-rules', rulesFile: this.getSettings().rulesFile }));
 			return;
 		}
 
